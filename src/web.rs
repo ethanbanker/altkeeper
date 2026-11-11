@@ -2778,8 +2778,11 @@ async fn run_check(app: Arc<App>) {
     let team = apple::read_account(&app.dir).and_then(|a| a.team_id);
 
     let result = tokio::time::timeout(CHECK_TIMEOUT, async {
+        // Con `|_: &str| {}` la sequenza dei tentativi andava persa: in `detail` restava solo
+        // l'ultimo errore, spesso quello di un host trovato dalla scansione della rete.
+        let say = |m: &str| crate::log::line(&format!("[check] {m}"));
         let (addr, mut link) =
-            phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
+            phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, say).await?;
         let profiles = crate::phone_profiles(&mut link).await?;
         Ok::<_, String>((addr, profiles))
     })

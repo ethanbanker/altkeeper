@@ -29,6 +29,12 @@
   states that Wi-Fi pairing needs iOS/iPadOS 17 or later. The address is also recognised when it
   comes from the raw error line, where a colon follows it (`192.168.50.218:49152: connection lost`),
   not only when the sentence ends right after it.
+- **Checks blaming a random host.** When the saved address did not answer, AltKeeper went on
+  sweeping the /24 on port 49152 and the last hit overwrote the error, so a device configured at
+  `192.168.50.27` was reported as `192.168.50.218:49152: connection lost` — an address nobody
+  configured and, on that network, not even a device. The error of the configured address is now
+  the one reported, and the check logs every attempt (`[check] ...`) instead of discarding them,
+  so `docker logs` shows which address was tried and why it failed.
 - **Container crash loop when Bonjour cannot advertise.** A failed mDNS registration made
   `serve --altserver` exit; it is now logged and AltServer keeps serving by saved address or DNS-SD.
 - **Local Anisette server on Linux / Docker.** It never started there: the native libraries were
@@ -50,6 +56,9 @@
 - `uninstall.sh`: stops and removes the container and image, deletes the generated compose file,
   PIN and source checkout, and keeps pairing/account/backups unless `--purge` is given. `--docker`
   removes Docker only when `install.sh` installed it; `--dry-run` prints every action.
+- `ALTKEEPER_NO_SCAN=1` skips the /24 port scan, so an address given with `--phone` (or Bonjour)
+  fails in seconds instead of trying every host on the network. Useful where unrelated machines
+  listen on port 49152.
 - `altkeeper discover [--timeout N]`: lists the devices that announce `_remotepairing._tcp` on the
   network (name, address, real port) and hosts that answer on port 49152 without Bonjour, so "it
   cannot find my iPad/iPhone" can be diagnosed instead of guessed.

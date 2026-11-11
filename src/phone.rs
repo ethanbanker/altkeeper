@@ -1170,6 +1170,12 @@ fn subnet_hosts(own: std::net::Ipv4Addr) -> Vec<std::net::Ipv4Addr> {
 /// Cerca il telefono senza Bonjour: prova la porta del servizio (di solito 49152) su tutta la
 /// rete /24 della macchina, in parallelo. Serve quando le risposte Bonjour non arrivano.
 pub async fn scan_lan(port: u16) -> Vec<SocketAddr> {
+    // ALTKEEPER_NO_SCAN=1 spegne la scansione della rete /24: serve a provare Bonjour da solo e,
+    // su una rete dove altri host ascoltano sulla stessa porta, a far arrivare subito l'errore
+    // dell'indirizzo configurato invece di quello dell'ultimo trovato a caso.
+    if crate::env::is_set("NO_SCAN") {
+        return Vec::new();
+    }
     // "Collegando" un socket UDP (senza mandare niente) si legge l'indirizzo locale in uso.
     let Ok(sock) = tokio::net::UdpSocket::bind("0.0.0.0:0").await else {
         return Vec::new();
@@ -1324,6 +1330,9 @@ pub async fn connect_auto_in(
     let cache = dir.join(LAST_ADDR_FILE);
     let mut tried: Vec<SocketAddr> = Vec::new();
     let mut last_err = String::new();
+    // L'errore del primo indirizzo provato (quello configurato per il profilo) parla del telefono;
+    // quelli trovati dalla scansione sono host qualsiasi che ascoltano su quella porta.
+    let mut configured_err: Option<String> = None;
 
     let mut known: Vec<SocketAddr> = Vec::new();
     let saved = match read_saved_addresses(&dir.join(SAVED_ADDRS_FILE)) {
@@ -1362,6 +1371,9 @@ pub async fn connect_auto_in(
                     format!("{addr} did not respond")
                 )
             }
+        }
+        if configured_err.is_none() {
+            configured_err = Some(last_err.clone());
         }
         say(&crate::tr!(
             format!("{addr} non risponde, cerco il telefono in rete..."),
@@ -1419,7 +1431,7 @@ pub async fn connect_auto_in(
             "cannot find the iPhone on the network: is it on and connected to your home Wi-Fi?"
         )))
     } else {
-        Err(with_wifi_hint(last_err))
+        Err(with_wifi_hint(configured_err.unwrap_or(last_err)))
     }
 }
 
