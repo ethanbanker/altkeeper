@@ -16,6 +16,8 @@ IMAGE="${ALTKEEPER_IMAGE:-altkeeper:latest}"
 PIN=""
 PAIRING=""
 NO_BUILD=0
+ALLOW_HOST="${ALTKEEPER_ALLOW_HOST:-0}"
+DOCKER_INSTALLED=0
 
 if [ -t 1 ]; then
   C_RESET=$'\033[0m'; C_BLUE=$'\033[0;34m'; C_GREEN=$'\033[0;32m'
@@ -44,6 +46,7 @@ Options (when piping, put them after `-s --`):
   --branch NAME    git branch to build (default: main)
   --image NAME     use an existing image; do not clone or build
   --no-build       reuse the image already built on this machine
+  --force-host     allow installing on a Proxmox VE host (normally refused)
   -h, --help       show this help
 USAGE
 }
@@ -58,12 +61,19 @@ while [ $# -gt 0 ]; do
     --branch)   [ $# -ge 2 ] || die "--branch needs a name"; BRANCH="$2"; shift 2 ;;
     --image)    [ $# -ge 2 ] || die "--image needs a name"; IMAGE="$2"; NO_BUILD=1; shift 2 ;;
     --no-build) NO_BUILD=1; shift ;;
+    --force-host) ALLOW_HOST=1; shift ;;
     -h|--help)  usage; exit 0 ;;
     *)          die "Unknown option: $1 (try --help)" ;;
   esac
 done
 
 [ "$(id -u)" -eq 0 ] || die "Run as root: curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/install.sh | sudo bash"
+
+# On a Proxmox VE host this would install Docker and the container on the host itself.
+# Refuse unless explicitly forced: the container is the supported setup.
+if [ -d /etc/pve ] && [ "$ALLOW_HOST" != "1" ] && ! systemd-detect-virt --container >/dev/null 2>&1; then
+  die "This is a Proxmox VE host. Create the container first: bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/ct/altkeeper.sh)\" (or re-run with --force-host)."
+fi
 
 INSTALL_DIR="${INSTALL_DIR%/}"
 case "$INSTALL_DIR" in
@@ -100,6 +110,7 @@ if ! command -v docker >/dev/null 2>&1; then
   apt_install ca-certificates curl git
   curl -fsSL https://get.docker.com | sh
   systemctl enable --now docker >/dev/null 2>&1 || true
+  DOCKER_INSTALLED=1
 fi
 
 command -v curl >/dev/null 2>&1 || apt_install curl
@@ -120,6 +131,9 @@ docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required (th
 info "Using $INSTALL_DIR for configuration and data."
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 chmod 700 "$DATA_DIR"
+if [ "$DOCKER_INSTALLED" -eq 1 ]; then
+  printf 'installed by install.sh\n' > "$INSTALL_DIR/.docker-installed"
+fi
 
 if [ "$NO_BUILD" -eq 0 ]; then
   if [ -d "$SRC_DIR/.git" ]; then

@@ -4,6 +4,31 @@ AltKeeper runs unchanged inside Docker on a Proxmox LXC. There is no USB passthr
 unprivileged container, so the iPhone is reached over Wi-Fi with a pairing file created once on
 another computer.
 
+## 0. Create the container (from the Proxmox host)
+
+Run this on the Proxmox VE host, not inside a container. It creates the LXC and installs AltKeeper
+inside it:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/ct/altkeeper.sh)"
+```
+
+The script picks a free VMID, downloads a Debian 12 template, creates an **unprivileged** container
+with `nesting=1,keyctl=1` (required for Docker), starts it, runs the installer inside and prints the
+dashboard URL and PIN. Useful options:
+
+| Option | Default |
+| --- | --- |
+| `--vmid N` | next free ID |
+| `--cores N` / `--ram MB` / `--disk GB` | 2 / 4096 / 8 |
+| `--storage NAME` | `local-lvm` when present, else the first container storage |
+| `--bridge NAME` | `vmbr0` |
+| `--password PW` | generated root password |
+| `--destroy VMID` | stop and destroy an AltKeeper container |
+
+If you prefer to create the container yourself, use the manual steps below and run the installer
+**inside** it. `install.sh` refuses to install on a Proxmox host unless `--force-host` is given.
+
 ## LXC prerequisites
 
 Docker needs a nesting-capable container. On the Proxmox host:
@@ -51,8 +76,8 @@ file. Most users should not do this.
 
 ## 2. Start it
 
-The installer below does the build, the PIN, the Compose file and the start for you, using
-`/opt/altkeeper`:
+Inside the container, the installer does the build, the PIN, the Compose file and the start for
+you, using `/opt/altkeeper`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/install.sh | sudo bash

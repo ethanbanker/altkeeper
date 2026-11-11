@@ -19,6 +19,9 @@
   is retried three times before anything is declared disconnected, and a socket that closes during
   the handshake is reported as a network problem instead of "pairing failed" (which wrongly sent
   users to re-pair over USB).
+- **Installing Docker on the Proxmox host by mistake.** `install.sh` now detects a Proxmox VE host
+  (when `/etc/pve` exists and it is not inside a container) and points at `ct/altkeeper.sh` instead,
+  unless `--force-host` is passed.
 - **Container crash loop when Bonjour cannot advertise.** A failed mDNS registration made
   `serve --altserver` exit; it is now logged and AltServer keeps serving by saved address or DNS-SD.
 - **Local Anisette server on Linux / Docker.** It never started there: the native libraries were
@@ -34,6 +37,12 @@
   still look for the legacy names cannot self-update to this release and need a manual download.
 
 ### Added
+- `ct/altkeeper.sh` for Proxmox VE: creates an unprivileged Debian 12 LXC with `nesting=1,keyctl=1`,
+  installs AltKeeper inside it, prints the dashboard URL and PIN, and can destroy the container with
+  `--destroy VMID`.
+- `uninstall.sh`: stops and removes the container and image, deletes the generated compose file,
+  PIN and source checkout, and keeps pairing/account/backups unless `--purge` is given. `--docker`
+  removes Docker only when `install.sh` installed it; `--dry-run` prints every action.
 - Upload an `rp-pairing.plist` from the dashboard (**iPhone → No USB? Upload a pairing file**) for the
   selected device. It is validated before replacing a working pairing and written with mode 0600 to
   the device profile (`/data/rp-pairing.plist` or `/data/devices/<id>/rp-pairing.plist`), so a

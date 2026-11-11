@@ -11,7 +11,17 @@ Wi-Fi. It runs on a home server, a Mac, or Windows.
 
 ## Quick install (Docker)
 
-On Debian/Ubuntu or a Proxmox LXC, Docker is installed if missing and the rest is automatic:
+On a Proxmox VE host, create the container first (the installer refuses to run on the host):
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/ct/altkeeper.sh)"
+```
+
+It picks a free container ID, downloads a Debian 12 template, creates an unprivileged LXC with
+Docker support (`nesting=1,keyctl=1`), installs AltKeeper inside and prints the dashboard URL and
+PIN. `--destroy <id>` removes it.
+
+Inside an existing Debian/Ubuntu container or VM, the installer does the rest:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/install.sh | sudo bash
@@ -26,6 +36,14 @@ curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/install.
 ```
 
 A cloned checkout can run `./install.sh --help`.
+
+To remove it (container, image, generated config; keeps pairing/account/backups):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/uninstall.sh | sudo bash
+```
+
+Add `--purge` to delete the data too, and `--docker` if the installer also installed Docker.
 
 ## Choose a guide
 
