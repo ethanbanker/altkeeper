@@ -190,6 +190,8 @@ services:
       - TZ=\${TZ:-UTC}
       - ALTKEEPER_LANG=en
       - ALTKEEPER_WEB_PIN=\${ALTKEEPER_WEB_PIN:?set ALTKEEPER_WEB_PIN in .env}
+      # Set ALTKEEPER_REVOKE_CERTS=1 in .env only if AltStore/SideStore certificates may be revoked.
+      - ALTKEEPER_REVOKE_CERTS=\${ALTKEEPER_REVOKE_CERTS:-0}
       # No USB inside an unprivileged LXC: the pairing file is copied in instead.
       - ALTKEEPER_NO_AUTO_PAIR=1
     command: ["serve", "--bind", "0.0.0.0:8787", "--altserver"]

@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Fixed
+- **`ALTKEEPER_REVOKE_CERTS` had no effect in the Docker install.** The generated Compose file only
+  forwards the variables it lists, so putting the flag in `/opt/altkeeper/.env` never reached the
+  container and signing kept failing with Apple error 7460. `install.sh` now passes it through
+  (`ALTKEEPER_REVOKE_CERTS`, default `0`); after editing `.env`, run `docker compose up -d` to
+  recreate the container.
 - **Dashboard sluggishness over time.** `/api/state` re-read and re-parsed the whole `renew.log`
   (which grew without limit) and re-scanned every profile backup on each poll, every 1.5 seconds
   while a job ran. The history is now read from the last 64 KiB, backups and the LAN address are
