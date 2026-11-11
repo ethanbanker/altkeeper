@@ -3339,6 +3339,9 @@ fn address_in(err: &str) -> Option<&str> {
     err.split(|c: char| {
         c.is_whitespace() || matches!(c, '(' | ')' | ',' | ';' | '"' | '\'')
     })
+    // Gli errori concatenano l'indirizzo con i due punti ("{addr}: connection lost"): senza
+    // toglierli il token non è più un SocketAddr e il messaggio torna generico.
+    .map(|token| token.trim_end_matches(|c: char| c == ':' || c == '.'))
     .find(|token| token.parse::<SocketAddr>().is_ok())
 }
 
@@ -4280,6 +4283,14 @@ mod tests {
         assert!(muto.contains("Nothing answered at 192.168.1.2:49152"), "{muto}");
         // Un iPad con iPadOS 16 non ascolta affatto: la nota va sempre mostrata.
         assert!(muto.contains("iOS 17"), "{muto}");
+        // Il dettaglio grezzo separa l'indirizzo con i due punti: deve restare riconoscibile.
+        let perso = friendly_error(
+            "192.168.50.218:49152: connection lost during pairing (Socket(Os { code: 104",
+        );
+        assert!(
+            perso.contains("Nothing answered at 192.168.50.218:49152"),
+            "{perso}"
+        );
         assert_eq!(friendly_error("boh"), "boh");
     }
 

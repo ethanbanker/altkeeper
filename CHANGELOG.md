@@ -26,7 +26,9 @@
   answer from the saved address, timeout, connection refused, connection lost — was reported with
   that one sentence, so a stale saved address or an iPad that never listens looked like a phone
   that was switched off. The dashboard now names the address that did not answer and always
-  states that Wi-Fi pairing needs iOS/iPadOS 17 or later.
+  states that Wi-Fi pairing needs iOS/iPadOS 17 or later. The address is also recognised when it
+  comes from the raw error line, where a colon follows it (`192.168.50.218:49152: connection lost`),
+  not only when the sentence ends right after it.
 - **Container crash loop when Bonjour cannot advertise.** A failed mDNS registration made
   `serve --altserver` exit; it is now logged and AltServer keeps serving by saved address or DNS-SD.
 - **Local Anisette server on Linux / Docker.** It never started there: the native libraries were
