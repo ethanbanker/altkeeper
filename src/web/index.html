@@ -2223,7 +2223,7 @@ async function refresh() {
     refreshInFlight = false;
     const again = refreshQueued;
     refreshQueued = false;
-    timer = setTimeout(refresh, again ? 0 : fast ? 1500 : 15000);
+    timer = setTimeout(refresh, again ? 0 : fast ? 3000 : 15000);
   }
 }
 

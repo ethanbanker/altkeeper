@@ -2,8 +2,9 @@
 #
 # Compilazione (per un server x86-64, anche da un Mac con Apple Silicon):
 #   docker build --platform linux/amd64 -t altkeeper:latest .
-# Uso: vedi examples/docker-compose.yml. Serve la rete dell'host (network_mode: host) per
-# trovare l'iPhone via Bonjour e per farsi trovare da AltStore.
+# Uso: vedi examples/docker-compose.yml (Docker) o examples/docker-compose.lxc.yml (Proxmox LXC).
+# Serve la rete dell'host (network_mode: host) per trovare l'iPhone via Bonjour e per farsi
+# trovare da AltStore.
 #
 # Nell'immagine NON c'è niente di segreto: pairing, account e stato stanno nel volume /data
 # (e .dockerignore tiene fuori dalla compilazione i file che li contengono).
@@ -20,6 +21,11 @@ RUN apt-get update \
 COPY --from=build /src/target/release/altkeeper /usr/local/bin/altkeeper
 WORKDIR /data
 VOLUME /data
+# `docker stop` / Proxmox shutdown: SIGTERM is handled by the app (Bonjour goodbye included).
+STOPSIGNAL SIGTERM
+# /healthz is unauthenticated on purpose: it returns "ok" and nothing else.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8787/healthz || exit 1
 ENTRYPOINT ["altkeeper"]
 # Il PIN arriva da ALTKEEPER_WEB_PIN: senza, `serve` su 0.0.0.0 non parte.
 CMD ["serve", "--bind", "0.0.0.0:8787", "--altserver"]

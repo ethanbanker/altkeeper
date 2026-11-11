@@ -108,7 +108,15 @@ pub fn start(port: u16, phone: Option<SocketAddr>) -> Result<u16, String> {
     })?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let id = server_id()?;
-    register_bonjour(port, &id)?;
+    // Bonjour is how AltStore normally finds the server, but a container or LXC with
+    // multicast blocked (or avahi already owning 5353) used to make this fatal and took the
+    // whole service down. Keep serving: a saved iPhone address or the DNS-SD mode still works.
+    if let Err(e) = register_bonjour(port, &id) {
+        log(&format!(
+            "Bonjour advertisement failed ({e}); AltServer keeps running. \
+             Set ALTKEEPER_NO_MDNS=1 to silence this, or configure a saved iPhone address."
+        ));
+    }
     log(&crate::tr!(
         format!("in ascolto sulla porta {port}, serverID {}...", &id[..8]),
         format!("listening on port {port}, serverID {}...", &id[..8])

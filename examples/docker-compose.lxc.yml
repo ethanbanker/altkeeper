@@ -1,0 +1,47 @@
+# AltKeeper inside Docker inside a Proxmox LXC.
+#
+# `network_mode: host` is required: Bonjour/mDNS is multicast and does not cross Docker's
+# default bridge, and AltStore must reach AltServer on port 49500 directly. Inside an LXC this
+# shares the LXC's network namespace, which is what you want.
+#
+# Put the PIN in /srv/altkeeper/.env, one line (at least 4 characters):
+#   ALTKEEPER_WEB_PIN=change-me
+# and make it private: chmod 600 /srv/altkeeper/.env
+#
+# See docs/en/proxmox-lxc.md for the LXC prerequisites (nesting, multicast, pairing file).
+services:
+  altkeeper:
+    image: altkeeper:latest
+    container_name: altkeeper
+    restart: unless-stopped
+    # PID 1 reaping and clean SIGTERM forwarding to `altkeeper serve`.
+    init: true
+    network_mode: host
+    working_dir: /data
+    volumes:
+      - /srv/altkeeper:/data
+      # Optional: local Anisette libraries, downloaded once into the data volume. If you prefer
+      # to supply them yourself, mount them read-only here instead:
+      # - /srv/anisette-libraries:/data/anisette-libraries:ro
+    environment:
+      - TZ=${TZ:-UTC}
+      # English CLI/log messages; the web page is English regardless.
+      - ALTKEEPER_LANG=en
+      - ALTKEEPER_WEB_PIN=${ALTKEEPER_WEB_PIN:?set ALTKEEPER_WEB_PIN in .env}
+      # Uncomment when the LXC cannot do multicast (or avahi owns 5353). Discovery then relies
+      # on the iPhone address saved in the dashboard or ALTKEEPER_PHONE.
+      # - ALTKEEPER_NO_MDNS=1
+      # USB is not available in an unprivileged LXC; pairing is copied in instead.
+      - ALTKEEPER_NO_AUTO_PAIR=1
+    command: ["serve", "--bind", "0.0.0.0:8787", "--altserver"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

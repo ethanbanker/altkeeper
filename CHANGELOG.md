@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Fixed
+- **Dashboard sluggishness over time.** `/api/state` re-read and re-parsed the whole `renew.log`
+  (which grew without limit) and re-scanned every profile backup on each poll, every 1.5 seconds
+  while a job ran. The history is now read from the last 64 KiB, backups and the LAN address are
+  cached for a few seconds, `renew.log` rotates at 2 MB, and the busy poll interval is 3 seconds.
+- **Spurious "Another operation is already running" errors.** When the iPhone was unreachable,
+  the automatic background check (which lasts up to ~70 seconds) ran again every 60 seconds and
+  held the exclusive phone lock, so user actions failed with 409. Automatic checks now back off to
+  five minutes after a failed check, skip while a job is running, and no longer leave the view
+  stuck in `checking` if the worker thread cannot start.
+- **"Cannot find the iPhone" and dropped pairing sessions.** The one-minute background check opened
+  its own remote-pairing session even while AltStore was installing, so iOS dropped one of the two
+  sessions ("disconnected from peer"); a single failed 3-second probe also aborted a pending
+  install as "iPhone disconnected". The check now waits for the phone lock, a transient Wi-Fi drop
+  is retried three times before anything is declared disconnected, and a socket that closes during
+  the handshake is reported as a network problem instead of "pairing failed" (which wrongly sent
+  users to re-pair over USB).
+- **Container crash loop when Bonjour cannot advertise.** A failed mDNS registration made
+  `serve --altserver` exit; it is now logged and AltServer keeps serving by saved address or DNS-SD.
 - **Local Anisette server on Linux / Docker.** It never started there: the native libraries were
   downloaded automatically only on Windows and macOS, and when they were missing the server gave up
   without a word, so "AltKeeper local server" failed with "error sending request". The libraries
@@ -16,6 +34,12 @@
   still look for the legacy names cannot self-update to this release and need a manual download.
 
 ### Added
+- `install.sh`, a community-scripts style one-command Docker installer for Debian/Ubuntu and
+  Proxmox LXC: installs Docker when missing, builds the image, creates `/opt/altkeeper` with a
+  generated PIN, copies an optional pairing file, starts the service and waits for `/healthz`.
+  Re-running it updates the checkout, rebuilds and restarts without touching the data.
+- Unauthenticated `/healthz` endpoint and an image `HEALTHCHECK` for Docker and Proxmox.
+- `docs/en/proxmox-lxc.md` and `examples/docker-compose.lxc.yml` for Docker inside a Proxmox LXC.
 - Automatic renewal can optionally register missing App IDs before downloading their profiles.
   The setting is off by default and the dashboard warns that registrations use the free Apple ID's
   10-per-7-days App ID quota.

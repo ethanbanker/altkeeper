@@ -543,6 +543,28 @@ async fn ask_pin() -> String {
     String::new()
 }
 
+/// Un calo di rete durante l'handshake non è un pairing da rifare: il telefono si è
+/// addormentato, il Wi-Fi ha cambiato canale o il router ha chiuso la connessione.
+fn looks_transient(error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    [
+        "eof",
+        "reset",
+        "broken pipe",
+        "timed out",
+        "timeout",
+        "connection",
+        "socket",
+        "peer",
+        "refused",
+        "unreachable",
+        "network",
+        "host is down",
+    ]
+    .iter()
+    .any(|marker| e.contains(marker))
+}
+
 /// Si collega al telefono via Wi-Fi con un pairing remoto già esistente.
 pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, String> {
     if !Path::new(pairing_path).exists() {
@@ -561,10 +583,20 @@ pub async fn connect(addr: SocketAddr, pairing_path: &str) -> Result<PhoneLink, 
         .connect(&mut pf, || async { ask_pin().await })
         .await
         .map_err(|e| {
-            crate::tr!(
-                format!("pairing con l'iPhone non riuscito ({e:?}). Se il telefono non riconosce questo pairing, rifallo con `altkeeper pair-usb`"),
-                format!("iPhone pairing failed ({e:?}). If the phone does not recognize the pairing, repeat `altkeeper pair-usb`")
-            )
+            let detail = format!("{e:?}");
+            // A phone that falls asleep or changes network closes the socket in the
+            // middle of the handshake: that is the network, not a pairing to redo.
+            if looks_transient(&detail) {
+                crate::tr!(
+                    format!("{addr}: connessione persa durante il pairing ({detail})"),
+                    format!("{addr}: connection lost during pairing ({detail})")
+                )
+            } else {
+                crate::tr!(
+                    format!("pairing con l'iPhone non riuscito ({detail}). Se il telefono non riconosce questo pairing, rifallo con `altkeeper pair-usb`"),
+                    format!("iPhone pairing failed ({detail}). If the phone does not recognize this pairing, repeat `altkeeper pair-usb`")
+                )
+            }
         })?;
 
     let port = client.create_tcp_listener().await.map_err(dbg)?;
@@ -974,10 +1006,22 @@ pub async fn probe_profile(
 ) -> crate::renewal_wait::Probe {
     use crate::renewal_wait::Probe;
     if let Via::Wifi(addr) = via {
-        if !matches!(
-            tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await,
-            Ok(Ok(_))
-        ) {
+        // A one-second Wi-Fi hiccup (power save, roaming, a busy access point) used to
+        // abort a pending install as "disconnected": retry before calling it gone.
+        let mut reachable = false;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            if matches!(
+                tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await,
+                Ok(Ok(_))
+            ) {
+                reachable = true;
+                break;
+            }
+        }
+        if !reachable {
             return Probe::Disconnected(format!("{addr} is no longer reachable"));
         }
     }
@@ -1087,7 +1131,7 @@ pub async fn scan_lan(port: u16) -> Vec<SocketAddr> {
     for ip in subnet_hosts(own) {
         set.spawn(async move {
             let addr = SocketAddr::new(IpAddr::V4(ip), port);
-            match tokio::time::timeout(Duration::from_millis(600), TcpStream::connect(addr)).await {
+            match tokio::time::timeout(Duration::from_millis(1200), TcpStream::connect(addr)).await {
                 Ok(Ok(_)) => Some(addr),
                 _ => None,
             }
@@ -1479,6 +1523,15 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn una_caduta_di_rete_non_e_un_pairing_da_rifare() {
+        assert!(looks_transient(
+            "Socket(Os { code: 54, kind: ConnectionReset, message: \"Connection reset by peer\" })"
+        ));
+        assert!(looks_transient("UnexpectedEof"));
+        assert!(!looks_transient("PairingError(InvalidPairing)"));
     }
 
     #[test]

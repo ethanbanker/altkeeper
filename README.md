@@ -9,12 +9,32 @@ Wi-Fi. It runs on a home server, a Mac, or Windows.
 > physical devices. Use it with your own devices and Apple ID; it is not affiliated with Apple or
 > AltStore.
 
+## Quick install (Docker)
+
+On Debian/Ubuntu or a Proxmox LXC, Docker is installed if missing and the rest is automatic:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/install.sh | sudo bash
+```
+
+The script builds the image, creates `/opt/altkeeper` with a generated dashboard PIN, and starts
+the service. Re-run the same command to update. Options can be passed after `-s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ethanbanker/altkeeper/main/install.sh \
+  | sudo bash -s -- --pairing /root/rp-pairing.plist
+```
+
+A cloned checkout can run `./install.sh --help`.
+
 ## Choose a guide
 
 | I want to… | Guide |
 | --- | --- |
 | Set up AltKeeper and pair my iPhone | [Quick start](docs/en/quick-start.md) |
 | Choose Docker, Windows, or macOS deployment | [Deployment](docs/en/deployment.md) |
+| Run it in Docker inside a Proxmox LXC | [Proxmox LXC](docs/en/proxmox-lxc.md) |
+| Install with one command | [`install.sh`](install.sh) (see Quick install above) |
 | Host my own Anisette V3 server | [Local Anisette server](docs/en/anisette-server.md) |
 | Sign in, renew apps, or manage multiple devices | [Accounts and renewals](docs/en/accounts-and-renewals.md) |
 | Use the web dashboard, install an IPA, or enable JIT | [Web and JIT](docs/en/web-and-jit.md) |

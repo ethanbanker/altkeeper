@@ -27,6 +27,15 @@ persist there. The image does not include these files. For optional USB access f
 see the commented `usbmuxd` mount in the Compose file. For local Anisette, follow
 [Local Anisette server](anisette-server.md).
 
+## Proxmox LXC
+
+Docker inside a Proxmox LXC works with host networking. USB pairing is not available in an
+unprivileged container: create `rp-pairing.plist` on another machine and copy it into
+`/srv/altkeeper`. Multicast may be blocked, in which case AltKeeper logs the failed Bonjour
+advertisement and keeps serving; save the iPhone address in the dashboard instead. See
+[Proxmox LXC](proxmox-lxc.md) for the container options and a ready-made Compose file
+(`examples/docker-compose.lxc.yml`).
+
 ## Windows
 
 Use the native Windows executable rather than Docker Desktop: AltKeeper relies on Bonjour and

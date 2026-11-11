@@ -64,6 +64,24 @@ struct App {
     auto_renew: Mutex<AutoRenewConfig>,
     pending_ipa: Mutex<Option<PendingIpa>>,
     renewal_wait: crate::renewal_wait::Control,
+    /// Expensive data the dashboard polls for: rebuilt at most once every few seconds
+    /// instead of on every request.
+    backups_cache: Mutex<CachedBackups>,
+    lan_ip_cache: Mutex<CachedLanIp>,
+}
+
+#[derive(Default)]
+struct CachedBackups {
+    at: u64,
+    team: String,
+    value: Vec<Value>,
+}
+
+#[derive(Default)]
+struct CachedLanIp {
+    at: u64,
+    hint: Option<String>,
+    value: Option<String>,
 }
 
 struct DeviceRuntime {
@@ -203,8 +221,9 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     let app = guard.app.clone();
+    let failed = app.clone();
     // Più stack del predefinito (2 MB): i futuri del telefono e di Apple sono grandi, soprattutto in debug.
-    let _ = std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let _guard = guard;
@@ -231,6 +250,16 @@ where
                 }
             }
         });
+    if spawned.is_err() {
+        // The guard was dropped with the closure, but the view must not stay "checking".
+        let mut g = failed.lock();
+        g.snapshot.checking = false;
+        g.job.running = false;
+        g.job.ok = Some(false);
+        g.job
+            .lines
+            .push("Internal error: could not start the worker thread.".into());
+    }
 }
 
 fn now() -> u64 {
@@ -678,6 +707,7 @@ fn device_manager_router(manager: Arc<DeviceManager>) -> Router {
         .route("/", get(index))
         .route("/apple-touch-icon.png", get(apple_touch_icon))
         .route("/favicon-32.png", get(favicon_32))
+        .route("/healthz", get(health))
         .fallback(dispatch_device_request)
         .layer(middleware::from_fn_with_state(
             manager.clone(),
@@ -704,6 +734,8 @@ fn create_device_runtime(
         auto_renew: Mutex::new(load_auto_renew(&dir)),
         pending_ipa: Mutex::new(None),
         renewal_wait: crate::renewal_wait::Control::default(),
+        backups_cache: Mutex::new(CachedBackups::default()),
+        lan_ip_cache: Mutex::new(CachedLanIp::default()),
     });
     tokio::spawn(auto_renew_loop(app.clone()));
     DeviceRuntime {
@@ -874,15 +906,15 @@ async fn manager_guard(
     req: Request,
     next: Next,
 ) -> Response {
-    let public_icon = req.method() == Method::GET
+    let public_route = req.method() == Method::GET
         && matches!(
             req.uri().path(),
-            "/apple-touch-icon.png" | "/favicon-32.png"
+            "/apple-touch-icon.png" | "/favicon-32.png" | "/healthz"
         );
-    if !public_icon && manager.pin.is_none() && !host_is_local(req.headers()) {
+    if !public_route && manager.pin.is_none() && !host_is_local(req.headers()) {
         return (StatusCode::FORBIDDEN, "host non ammesso").into_response();
     }
-    if !public_icon {
+    if !public_route {
         if let Some(pin) = &manager.pin {
             if !basic_password_ok(req.headers(), pin) {
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1038,6 +1070,11 @@ async fn favicon_32() -> Response {
     png_response(FAVICON_32)
 }
 
+/// Unauthenticated liveness probe for Docker/Proxmox health checks. It reveals nothing.
+async fn health() -> &'static str {
+    "ok"
+}
+
 fn json_err(status: StatusCode, msg: &str) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "error": msg })))
 }
@@ -1083,9 +1120,16 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     let pairing = app.dir.join(PAIRING_FILE).exists();
 
     // Se i dati sul telefono sono vecchi, si riguarda in background senza far aspettare la pagina.
+    // Un telefono irraggiungibile costa un intero ciclo di ricerca (fino a ~70 secondi) e tiene
+    // occupato il lock esclusivo: in quel caso si riprova con calma, altrimenti ogni azione
+    // dell'utente trovava "un'altra operazione è già in corso".
     let stale = {
         let g = app.lock();
-        pairing && !g.snapshot.checking && g.snapshot.checked_at.is_none_or(|t| now() - t > 60)
+        let interval = if g.snapshot.reachable == Some(false) { 300 } else { 60 };
+        pairing
+            && !g.snapshot.checking
+            && !g.job.running
+            && g.snapshot.checked_at.is_none_or(|t| now().saturating_sub(t) >= interval)
     };
     if stale {
         if let Some(guard) = try_busy(&app) {
@@ -1094,9 +1138,9 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
         }
     }
 
-    let history = std::fs::read_to_string(app.dir.join(RENEW_LOG))
-        .map(|t| parse_history(&t, 6))
-        .unwrap_or_default();
+    // Only the tail matters here: renew.log is append-only and used to be re-read and
+    // re-parsed in full on every dashboard poll (1.5 s while a job runs).
+    let history = parse_history(&read_tail(&app.dir.join(RENEW_LOG), 64 * 1024), 6);
     // Copy the view and release its mutex before reading the schedule. Never
     // hold the UI and scheduler mutexes together (retry logging also uses UI).
     let g = app.lock().clone();
@@ -1112,6 +1156,13 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
     let phone_addresses = phone::saved_addresses_in(&app.dir);
     let is_renewal = g.job.kind.starts_with("renew") || g.job.kind == "auto_renew";
     let anisette = apple::anisette_choice(&app.dir);
+    let backups = account
+        .as_ref()
+        .and_then(|a| a.team_id.as_deref())
+        .map(|team| cached_backups(&app, team))
+        .unwrap_or_default();
+    // Probing for the LAN address opens UDP sockets: it does not need to run on every poll.
+    let lan_ip = cached_lan_ip(&app, g.snapshot.address.as_deref());
 
     Json(json!({
         "now": now(),
@@ -1206,9 +1257,8 @@ async fn state(State(app): State<Arc<App>>) -> Json<Value> {
             "code_error": if asking { code_error } else { None },
         },
         "history": history,
-        "backups": account.as_ref().and_then(|a| a.team_id.as_deref())
-            .map(|team| backup_views(&app.dir, team)).unwrap_or_default(),
-        "lan_ip": discover_lan_ip_for(g.snapshot.address.as_deref()),
+        "backups": backups,
+        "lan_ip": lan_ip,
         "app_status": std::fs::read_to_string(app.dir.join(APP_STATUS_FILE)).ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .unwrap_or(json!({})),
@@ -1608,6 +1658,63 @@ async fn update_auto_renew(
     json_ok()
 }
 
+/// Read at most the last `max` bytes of a text file. `renew.log` grows forever, so reading
+/// (and parsing) all of it on every dashboard poll is what made the page sluggish over time.
+fn read_tail(path: &Path, max: u64) -> String {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if len > max && file.seek(SeekFrom::End(-(max as i64))).is_err() {
+        return String::new();
+    }
+    let mut buf = Vec::new();
+    if (&mut file).take(max).read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    if len > max {
+        // The first line is probably a partial one: drop it.
+        match text.find('\n') {
+            Some(i) => text[i + 1..].to_string(),
+            None => text,
+        }
+    } else {
+        text
+    }
+}
+
+fn cached_backups(app: &App, team: &str) -> Vec<Value> {
+    let mut cache = app
+        .backups_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if cache.team == team && now().saturating_sub(cache.at) < 15 {
+        return cache.value.clone();
+    }
+    let value = backup_views(&app.dir, team);
+    cache.at = now();
+    cache.team = team.to_owned();
+    cache.value = value.clone();
+    value
+}
+
+fn cached_lan_ip(app: &App, hint: Option<&str>) -> Option<String> {
+    let mut cache = app.lan_ip_cache.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.at != 0
+        && cache.hint.as_deref() == hint
+        && now().saturating_sub(cache.at) < 60
+    {
+        return cache.value.clone();
+    }
+    let value = discover_lan_ip_for(hint);
+    cache.at = now();
+    cache.hint = hint.map(str::to_owned);
+    cache.value = value.clone();
+    value
+}
+
 fn backup_views(dir: &Path, team: &str) -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(dir.join(crate::SAVED_DIR)) else {
         return Vec::new();
@@ -1870,6 +1977,7 @@ async fn run_restore_profile(app: Arc<App>, uuid: String, team: String) {
         if !p.uuid.eq_ignore_ascii_case(&uuid) || p.team_id.as_deref() != Some(&team) {
             return Err("Backup does not belong to the configured Apple team".into());
         }
+        let _work = crate::altserver::phone_lock();
         let (_, mut link) =
             phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
         phone::with_timeout(
@@ -2543,6 +2651,16 @@ async fn logout(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
 
 /// Guarda cosa c'è sul telefono (senza toccare Apple).
 async fn run_check(app: Arc<App>) {
+    // AltServer serves AltStore from its own threads. Opening a second pairing session
+    // while an install is talking to the iPhone makes iOS drop one of them ("the peer
+    // disconnected"), which is the intermittent error this check used to cause every
+    // minute. Wait for the phone to be free; a skipped check is harmless.
+    let Some(_work) = crate::altserver::try_phone_lock() else {
+        let mut g = app.lock();
+        g.snapshot.checking = false;
+        g.snapshot.checked_at = Some(now());
+        return;
+    };
     app.lock().snapshot.checking = true;
     let team = apple::read_account(&app.dir).and_then(|a| a.team_id);
 
@@ -2755,6 +2873,7 @@ async fn run_remove_profiles(app: Arc<App>, uuids: Vec<String>) {
         let team = apple::read_account(&app.dir)
             .and_then(|a| a.team_id)
             .ok_or("Sign in to select a team before removing profiles.")?;
+        let _work = crate::altserver::phone_lock();
         let (_, mut link) =
             phone::connect_auto_in(&app.dir, app.phone, PAIRING_FILE, |_: &str| {}).await?;
         for (i, uuid) in uuids.iter().enumerate() {
@@ -3115,6 +3234,8 @@ fn friendly_error(err: &str) -> String {
         || e.contains("non trovo l'iphone")
         || e.contains("timed out")
         || e.contains("refused")
+        || e.contains("connection lost")
+        || e.contains("connessione persa")
     {
         "I cannot find the iPhone on the network. Is it on and connected to your home Wi-Fi?".into()
     } else {
@@ -3376,10 +3497,18 @@ fn local_time() -> String {
 }
 
 fn append_log(dir: &Path, lines: &[String], ok: bool) {
+    const MAX_RENEW_LOG: u64 = 2 * 1024 * 1024;
+    let path = dir.join(RENEW_LOG);
+    // Keep the history file bounded: it is read by the dashboard and by cron reports.
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_RENEW_LOG) {
+        let old = dir.join("renew.log.1");
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::rename(&path, old);
+    }
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join(RENEW_LOG))
+        .open(&path)
     else {
         return;
     };
@@ -3492,6 +3621,8 @@ mod tests {
             auto_renew: Mutex::new(AutoRenewConfig::default()),
             pending_ipa: Mutex::new(None),
             renewal_wait: crate::renewal_wait::Control::default(),
+            backups_cache: Mutex::new(CachedBackups::default()),
+            lan_ip_cache: Mutex::new(CachedLanIp::default()),
         });
         {
             let mut g = app.lock();
@@ -3565,6 +3696,8 @@ mod tests {
             auto_renew: Mutex::new(AutoRenewConfig::default()),
             pending_ipa: Mutex::new(None),
             renewal_wait: crate::renewal_wait::Control::default(),
+            backups_cache: Mutex::new(CachedBackups::default()),
+            lan_ip_cache: Mutex::new(CachedLanIp::default()),
         });
         let schedule = app.auto_renew.lock().unwrap();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
@@ -4042,6 +4175,23 @@ mod tests {
             short_apple_error("x\n ● uno\n ● due cose non previste"),
             "due cose non previste"
         );
+    }
+
+    #[test]
+    fn read_tail_reads_only_the_newest_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(super::read_tail(&dir.path().join("missing.log"), 64).is_empty());
+
+        let path = dir.path().join("renew.log");
+        let mut body = String::new();
+        for i in 0..200 {
+            body.push_str(&format!("=== block-{i:03}\nresult: 0\n"));
+        }
+        std::fs::write(&path, &body).unwrap();
+        let tail = super::read_tail(&path, 256);
+        assert!(tail.len() <= 256);
+        assert!(tail.contains("block-199"));
+        assert!(!tail.contains("block-000"));
     }
 
     #[test]
