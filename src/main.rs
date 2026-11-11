@@ -60,9 +60,9 @@ fn save_password_confirmed(answer: &str) -> bool {
     )
 }
 
-const USAGE: &str = "uso: altkeeper <phone|pair-usb|login|apps|renew|profile-remove|\
+const USAGE: &str = "uso: altkeeper <phone|pair-usb|discover|login|apps|renew|profile-remove|\
                      profile-restore|serve [--anisette-bind ip:porta]|altserver|version> [opzioni]";
-const USAGE_EN: &str = "usage: altkeeper <phone|pair-usb|login|apps|renew|profile-remove|\
+const USAGE_EN: &str = "usage: altkeeper <phone|pair-usb|discover|login|apps|renew|profile-remove|\
                      profile-restore|serve [--anisette-bind ip:port]|altserver|version> [options]";
 
 /// Dove `profile-remove` tiene la copia dei profili tolti dal telefono.
@@ -219,6 +219,84 @@ fn profile_line(p: &profile::PhoneProfile) -> String {
 
 fn print_profile(p: &profile::PhoneProfile) {
     println!("{}", profile_line(p));
+}
+
+/// Elenca i dispositivi che si annunciano come `_remotepairing._tcp`: è la risposta a
+/// "perché non trova questo telefono?". Un dispositivo spento, bloccato o mai accoppiato via
+/// USB non si annuncia, e il pairing non si può creare in Wi-Fi.
+async fn cmd_discover(timeout: Option<String>) -> Result<(), String> {
+    let wait: u64 = match timeout {
+        Some(value) => value.parse().map_err(|e| {
+            crate::tr!(
+                format!("--timeout non valido: {e}"),
+                format!("invalid --timeout: {e}")
+            )
+        })?,
+        None => 8,
+    }
+    .clamp(1, 60);
+    println!(
+        "{}",
+        crate::tr!(
+            format!("cerco dispositivi _remotepairing._tcp per {wait} s..."),
+            format!("browsing _remotepairing._tcp for {wait} s...")
+        )
+    );
+    let found = phone::discover_devices(std::time::Duration::from_secs(wait)).await;
+    if found.is_empty() {
+        println!(
+            "{}",
+            crate::tr!(
+                "nessun dispositivo si è annunciato via Bonjour: è acceso, sbloccato e sul Wi-Fi di casa? il pairing è stato fatto via USB?",
+                "no device announced itself over Bonjour: is it on, unlocked and on the home Wi-Fi? was it paired over USB?"
+            )
+        );
+    } else {
+        for device in &found {
+            println!("  {}", device.describe());
+        }
+    }
+    // Il multicast non passa sempre da un bridge o da un LXC: la porta del pairing si prova
+    // comunque, così si vede almeno un dispositivo che Bonjour non ha annunciato.
+    let scanned = phone::scan_lan(49152).await;
+    let extra: Vec<&SocketAddr> = scanned
+        .iter()
+        .filter(|addr| !found.iter().any(|d| d.endpoints().contains(addr)))
+        .collect();
+    if !extra.is_empty() {
+        println!(
+            "{}",
+            crate::tr!(
+                "trovati sulla rete ma non annunciati (mDNS muto):",
+                "reachable on the network but not announced (mDNS silent):"
+            )
+        );
+        for addr in extra {
+            println!("  {addr}");
+        }
+    }
+    println!(
+        "{}",
+        crate::tr!(
+            format!(
+                "pairing remoto in questa cartella: {}",
+                if Path::new(PAIRING_FILE).exists() {
+                    "presente"
+                } else {
+                    "MANCANTE"
+                }
+            ),
+            format!(
+                "remote pairing in this directory: {}",
+                if Path::new(PAIRING_FILE).exists() {
+                    "present"
+                } else {
+                    "MISSING"
+                }
+            )
+        )
+    );
+    Ok(())
 }
 
 async fn cmd_phone(addr: Option<SocketAddr>) -> Result<(), String> {
@@ -867,6 +945,7 @@ async fn run() -> Result<(), String> {
             );
             Ok(())
         }
+        "discover" => cmd_discover(opt("--timeout")).await,
         "login" => cmd_login(args.first().cloned()).await,
         "apps" => cmd_apps().await,
         "renew" => {

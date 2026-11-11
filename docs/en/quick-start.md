@@ -78,6 +78,12 @@ AltKeeper normally discovers the iPhone automatically. To set a fixed address, p
 `--phone ip:port` or set `ALTKEEPER_PHONE=ip:port`; the pairing service usually uses port `49152`.
 The iPhone must be on Wi-Fi for its remote pairing service to be reachable.
 
+If a second device is not found, run `./AltKeeper discover` (or `docker exec altkeeper altkeeper
+discover`) from the data directory. It lists every `_remotepairing._tcp` device with the address and
+port it announces, plus hosts that answer on port 49152 without Bonjour. A device that does not
+appear there is off, locked, on another network/VLAN, or has no USB pairing record: pairing cannot
+be created over Wi-Fi, and every device needs its own `rp-pairing.plist`.
+
 CLI messages default to English. Set `ALTKEEPER_LANG=it` for Italian; this does not change the
 dashboard language.
 

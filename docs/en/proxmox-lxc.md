@@ -145,7 +145,7 @@ command updates the source, rebuilds and restarts, keeping the data and the PIN.
 | Symptom | Cause and fix |
 | --- | --- |
 | Container exits right after start | No `ALTKEEPER_WEB_PIN` while bound to `0.0.0.0`. Check `docker logs`. |
-| Dashboard reachable, phone never found | mDNS blocked, IGMP snooping on the bridge, Wi-Fi client isolation, or a changed iPhone IP. Save the address in the dashboard; try `ALTKEEPER_NO_MDNS=1`. |
+| Dashboard reachable, phone never found | Run `docker exec altkeeper altkeeper discover` inside the LXC. A device missing from that list is not announcing `_remotepairing._tcp` (off, locked, other VLAN, or no USB pairing record); a device listed there but still unreachable needs its `ip:port` entered in that device's profile. Also check mDNS blocked, IGMP snooping on the bridge, Wi-Fi client isolation, or a changed iPhone IP; try `ALTKEEPER_NO_MDNS=1`. |
 | AltStore cannot see the server | `network_mode: host` missing, port 49500 blocked, or multicast blocked. A saved phone address does not fix AltStore discovery — use DNS-SD mode. |
 | `Bonjour advertisement failed` in logs | Port 5353 already owned (avahi in the LXC) or multicast blocked. Non-fatal; discovery by address still works. |
 | Settings changes do not persist | `/srv/altkeeper` is not mounted at `/data`, or the volume is not writable by root. |

@@ -3,7 +3,7 @@
 
 use std::any::Any;
 use std::collections::HashSet;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -1065,11 +1065,37 @@ pub fn mdns() -> Option<&'static mdns_sd::ServiceDaemon> {
         .as_ref()
 }
 
-/// Cerca via Bonjour gli iPhone in rete (servizio `_remotepairing._tcp`): indirizzi IPv4 e porta.
-/// L'indirizzo del telefono cambia di tanto in tanto: così non serve saperlo.
-pub async fn discover(wait: Duration) -> Vec<SocketAddr> {
-    // ALTKEEPER_NO_MDNS=1 spegne Bonjour (per provare la scansione della rete, o se sulla rete il
-    // multicast è bloccato).
+/// Un dispositivo che si annuncia come `_remotepairing._tcp`: nome, porta e indirizzi reali.
+/// Serve a capire cosa vede davvero la rete quando un telefono "non si trova".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveredDevice {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub addresses: Vec<Ipv4Addr>,
+}
+
+impl DiscoveredDevice {
+    pub fn endpoints(&self) -> Vec<SocketAddr> {
+        self.addresses
+            .iter()
+            .map(|ip| SocketAddr::new(IpAddr::V4(*ip), self.port))
+            .collect()
+    }
+
+    pub fn describe(&self) -> String {
+        let addrs = self
+            .endpoints()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{} ({addrs})", self.name)
+    }
+}
+
+/// Cerca via Bonjour tutti i dispositivi in rete, con il nome che annunciano e la porta vera.
+pub async fn discover_devices(wait: Duration) -> Vec<DiscoveredDevice> {
     if crate::env::is_set("NO_MDNS") {
         return Vec::new();
     }
@@ -1081,15 +1107,23 @@ pub async fn discover(wait: Duration) -> Vec<SocketAddr> {
             return Vec::new();
         };
         let mut deadline = Instant::now() + wait;
-        let mut found: Vec<SocketAddr> = Vec::new();
+        let mut found: Vec<DiscoveredDevice> = Vec::new();
         while let Some(left) = deadline.checked_duration_since(Instant::now()) {
             match events.recv_timeout(left) {
                 Ok(mdns_sd::ServiceEvent::ServiceResolved(svc)) => {
-                    for ip in svc.get_addresses_v4() {
-                        let addr = SocketAddr::new(IpAddr::V4(ip), svc.get_port());
-                        if !found.contains(&addr) {
-                            found.push(addr);
-                        }
+                    let addresses: Vec<Ipv4Addr> =
+                        svc.get_addresses_v4().iter().copied().collect();
+                    if addresses.is_empty() {
+                        continue;
+                    }
+                    let device = DiscoveredDevice {
+                        name: svc.get_fullname().to_owned(),
+                        host: svc.get_hostname().to_owned(),
+                        port: svc.get_port(),
+                        addresses,
+                    };
+                    if !found.iter().any(|d| d.name == device.name) {
+                        found.push(device);
                     }
                     // Trovato: si aspetta ancora un attimo per un eventuale secondo telefono.
                     deadline = deadline.min(Instant::now() + Duration::from_millis(700));
@@ -1103,6 +1137,25 @@ pub async fn discover(wait: Duration) -> Vec<SocketAddr> {
     })
     .await
     .unwrap_or_default()
+}
+
+/// Cerca via Bonjour gli iPhone in rete (servizio `_remotepairing._tcp`): indirizzi IPv4 e porta.
+/// L'indirizzo del telefono cambia di tanto in tanto: così non serve saperlo.
+pub async fn discover(wait: Duration) -> Vec<SocketAddr> {
+    // ALTKEEPER_NO_MDNS=1 spegne Bonjour (per provare la scansione della rete, o se sulla rete il
+    // multicast è bloccato).
+    if crate::env::is_set("NO_MDNS") {
+        return Vec::new();
+    }
+    let mut found: Vec<SocketAddr> = Vec::new();
+    for device in discover_devices(wait).await {
+        for addr in device.endpoints() {
+            if !found.contains(&addr) {
+                found.push(addr);
+            }
+        }
+    }
+    found
 }
 
 /// Gli altri indirizzi della stessa rete /24 (senza il proprio, né rete né broadcast).
@@ -1453,6 +1506,21 @@ mod tests {
         assert_eq!(major_ios_version("27.0.1"), Some(27));
         assert_eq!(major_ios_version("unknown"), None);
         assert_eq!(major_ios_version(""), None);
+    }
+
+    #[test]
+    fn un_dispositivo_trovato_espone_indirizzi_e_porta() {
+        let device = DiscoveredDevice {
+            name: "iPad._remotepairing._tcp.local.".into(),
+            host: "iPad.local.".into(),
+            port: 49152,
+            addresses: vec![Ipv4Addr::new(192, 168, 50, 37)],
+        };
+        assert_eq!(
+            device.endpoints(),
+            vec!["192.168.50.37:49152".parse().unwrap()]
+        );
+        assert!(device.describe().contains("192.168.50.37:49152"));
     }
 
     #[test]
