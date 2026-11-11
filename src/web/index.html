@@ -1255,6 +1255,7 @@
             </label>
             <details style="margin-top:12px">
               <summary data-i18n="Connection addresses" style="cursor:pointer; font-weight:650; color:var(--accent);">Connection addresses</summary>
+              <p class="muted" id="phone-addresses-device" style="margin:8px 0 6px; font-weight:650; color:var(--text)"></p>
               <label for="phone-addresses" data-i18n="Saved iPhone addresses (optional)">Saved iPhone addresses (optional)</label>
               <textarea id="phone-addresses" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="10.7.0.2:49152" style="width:100%;max-width:100%;box-sizing:border-box;font:inherit;padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--card-alt);color:var(--text)"></textarea>
               <p class="muted" data-i18n="Save up to two IP:port addresses, one per line, such as your home and VPN addresses.">Save up to two IP:port addresses, one per line, such as your home and VPN addresses.</p>
@@ -1778,6 +1779,13 @@ function banner(id, text, cls) {
   e.hidden = !text;
 }
 
+function deviceTitle(s) {
+  const device = (s && s.device) || {};
+  return (device.name === "Default iPhone" || device.id === "default")
+    ? "My iPhone"
+    : (device.name || "");
+}
+
 function render(s) {
   state = s;
   show("no-pairing", !s.pairing);
@@ -1788,6 +1796,11 @@ function render(s) {
   if (!phoneAddressDraftDirty) {
     $("phone-addresses").value = (s.phone_addresses?.addresses || []).join("\n");
   }
+  // Le addresses sono per dispositivo: senza il nome si salvano su quello sbagliato senza accorgersene.
+  const addressDevice = deviceTitle(s);
+  $("phone-addresses-device").textContent = addressDevice
+    ? t("These addresses are saved for") + ": " + addressDevice
+    : "";
   banner("phone-addresses-error", s.phone_addresses?.error || "", "bad");
   $("btn-cancel-wait").hidden = !(s.job.running && s.job.waiting_for_phone);
   $("btn-cancel-wait").disabled = !!s.job.cancel_requested;
@@ -2300,7 +2313,9 @@ $("phone-addresses-save").onclick = () => {
     const saved = await api("/api/phone-addresses", {addresses});
     phoneAddressDraftDirty = false;
     $("phone-addresses").value = saved.addresses.join("\n");
-    banner("phone-addresses-message", t("Addresses saved."), "good");
+    const savedFor = deviceTitle(state);
+    const what = saved.addresses.length ? t("Addresses saved") : t("Addresses cleared");
+    banner("phone-addresses-message", savedFor ? what + " " + t("for") + " " + savedFor + "." : what + ".", "good");
   }, "phone-addresses-error");
 };
 

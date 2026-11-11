@@ -22,6 +22,11 @@
 - **Installing Docker on the Proxmox host by mistake.** `install.sh` now detects a Proxmox VE host
   (when `/etc/pve` exists and it is not inside a container) and points at `ct/altkeeper.sh` instead,
   unless `--force-host` is passed.
+- **Misleading "Cannot find the iPhone on the network" message.** Every network failure — no
+  answer from the saved address, timeout, connection refused, connection lost — was reported with
+  that one sentence, so a stale saved address or an iPad that never listens looked like a phone
+  that was switched off. The dashboard now names the address that did not answer and always
+  states that Wi-Fi pairing needs iOS/iPadOS 17 or later.
 - **Container crash loop when Bonjour cannot advertise.** A failed mDNS registration made
   `serve --altserver` exit; it is now logged and AltServer keeps serving by saved address or DNS-SD.
 - **Local Anisette server on Linux / Docker.** It never started there: the native libraries were

@@ -3334,6 +3334,14 @@ fn profile_views(profiles: &[profile::PhoneProfile], team: &str) -> Vec<ProfileV
     views
 }
 
+/// L'indirizzo `ip:porta` citato in un errore, se c'è: serve a dire *dove* il telefono non risponde.
+fn address_in(err: &str) -> Option<&str> {
+    err.split(|c: char| {
+        c.is_whitespace() || matches!(c, '(' | ')' | ',' | ';' | '"' | '\'')
+    })
+    .find(|token| token.parse::<SocketAddr>().is_ok())
+}
+
 /// Traduce gli errori tecnici in una frase comprensibile.
 fn friendly_error(err: &str) -> String {
     let e = err.to_lowercase();
@@ -3350,7 +3358,23 @@ fn friendly_error(err: &str) -> String {
         || e.contains("connection lost")
         || e.contains("connessione persa")
     {
-        "I cannot find the iPhone on the network. Is it on and connected to your home Wi-Fi?".into()
+        // "Not found" and "found but silent" are different problems: naming the address tells the
+        // user whether the saved IP stopped working or the device never answered at all. Both end
+        // with the iOS 17 note, because an older iPad never listens and looks exactly like this.
+        let mut msg = match address_in(err) {
+            Some(address) => format!(
+                "Nothing answered at {address}: is that still the phone's address and port, and is \
+                 the device awake, unlocked and on the home Wi-Fi?"
+            ),
+            None => "I cannot find the iPhone on the network. Is it on and connected to your home \
+                     Wi-Fi?"
+                .to_string(),
+        };
+        msg.push_str(
+            " Wi-Fi pairing needs iOS 17 (iPadOS 17) or later: an older iPhone or iPad only works \
+             over USB.",
+        );
+        msg
     } else {
         short_error(err)
     }
@@ -4251,6 +4275,11 @@ mod tests {
         )
         .contains("cannot find the iPhone"));
         assert!(friendly_error("non trovo l'iPhone in rete: è acceso").contains("cannot find"));
+        // Un indirizzo salvato che non risponde non è "telefono sparito": va nominato.
+        let muto = friendly_error("192.168.1.2:49152 non risponde");
+        assert!(muto.contains("Nothing answered at 192.168.1.2:49152"), "{muto}");
+        // Un iPad con iPadOS 16 non ascolta affatto: la nota va sempre mostrata.
+        assert!(muto.contains("iOS 17"), "{muto}");
         assert_eq!(friendly_error("boh"), "boh");
     }
 
