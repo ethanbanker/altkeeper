@@ -757,6 +757,10 @@ fn profile_router(app: Arc<App>) -> Router {
         .route("/api/renew", post(renew))
         .route("/api/renew/cancel-wait", post(cancel_renew_wait))
         .route("/api/pair-usb", post(pair_usb))
+        .route(
+            "/api/pairing-file",
+            post(upload_pairing_file).layer(DefaultBodyLimit::max(128 * 1024)),
+        )
         .route("/api/auto-renew", post(update_auto_renew))
         .route("/api/discord", post(update_discord))
         .route("/api/discord/test", post(test_discord))
@@ -1461,6 +1465,115 @@ async fn update_auto_pair(
         StatusCode::OK,
         Json(json!({ "ok": true, "enabled": req.enabled })),
     )
+}
+
+/// Largest accepted pairing file: a real `rp-pairing.plist` is a few kilobytes.
+const MAX_PAIRING_BYTES: usize = 64 * 1024;
+
+/// Upload an `rp-pairing.plist` created with `altkeeper pair-usb` on another machine. An
+/// unprivileged LXC has no USB bus, so this replaces copying the file into the data volume by
+/// hand. The file goes to the profile of the device selected in the dashboard.
+async fn upload_pairing_file(
+    State(app): State<Arc<App>>,
+    mut multipart: Multipart,
+) -> (StatusCode, Json<Value>) {
+    let mut data: Option<Vec<u8>> = None;
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, &format!("Invalid upload: {e}")),
+        };
+        if field.name() != Some("pairing") || data.is_some() {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "Send one pairing file in the 'pairing' field.",
+            );
+        }
+        let mut body = Vec::new();
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    if body.len() + chunk.len() > MAX_PAIRING_BYTES {
+                        return json_err(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "The pairing file is larger than 64 KiB.",
+                        );
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return json_err(StatusCode::BAD_REQUEST, &format!("Upload failed: {e}"))
+                }
+            }
+        }
+        data = Some(body);
+    }
+    let Some(data) = data else {
+        return json_err(StatusCode::BAD_REQUEST, "Choose an rp-pairing.plist file.");
+    };
+    if let Err((status, message)) = store_pairing_file(&app.dir, &data).await {
+        return (status, Json(json!({ "error": message })));
+    }
+    {
+        // The next dashboard poll runs a check with the new pairing.
+        let mut g = app.lock();
+        g.snapshot.checked_at = None;
+        g.snapshot.reachable = None;
+        g.snapshot.error = None;
+        g.snapshot.detail = None;
+    }
+    crate::log::line(&format!(
+        "[pairing] uploaded for {} ({})",
+        app.device_name, app.device_id
+    ));
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "device": app.device_id,
+            "file": PAIRING_FILE,
+            "bytes": data.len(),
+        })),
+    )
+}
+
+/// Validate before replacing, so a wrong file never destroys a working pairing.
+async fn store_pairing_file(dir: &Path, data: &[u8]) -> Result<(), (StatusCode, String)> {
+    if data.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "The pairing file is empty.".into()));
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp = dir.join(format!("{PAIRING_FILE}.{nonce}.tmp"));
+    crate::fsperm::write_private(&temp, data).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Cannot save the pairing file: {e}"),
+        )
+    })?;
+    if !phone::pairing_file_valid(&temp).await {
+        let _ = std::fs::remove_file(&temp);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "This is not a valid remote pairing file. Create it with `altkeeper pair-usb` on a \
+             computer with the iPhone connected."
+                .into(),
+        ));
+    }
+    let dest = dir.join(PAIRING_FILE);
+    if let Err(e) = std::fs::rename(&temp, &dest) {
+        let _ = std::fs::remove_file(&temp);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Cannot install the pairing file: {e}"),
+        ));
+    }
+    let _ = crate::fsperm::restrict_file(&dest);
+    Ok(())
 }
 
 async fn pair_usb(State(app): State<Arc<App>>) -> (StatusCode, Json<Value>) {
@@ -4192,6 +4305,26 @@ mod tests {
         assert!(tail.len() <= 256);
         assert!(tail.contains("block-199"));
         assert!(!tail.contains("block-000"));
+    }
+
+    #[tokio::test]
+    async fn invalid_pairing_upload_keeps_the_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join(crate::PAIRING_FILE);
+        std::fs::write(&dest, b"existing pairing").unwrap();
+        let (status, message) = super::store_pairing_file(dir.path(), b"not a pairing plist")
+            .await
+            .unwrap_err();
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert!(message.contains("not a valid"));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"existing pairing");
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
     }
 
     #[test]

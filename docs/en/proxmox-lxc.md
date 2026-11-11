@@ -40,6 +40,11 @@ altkeeper pair-usb            # writes rp-pairing.plist
 Copy the resulting `rp-pairing.plist` to `/srv/altkeeper/rp-pairing.plist` on the Proxmox host and
 `chmod 600` it. Treat it as a secret: it is enough to talk to that iPhone.
 
+You can also upload it from the dashboard: **iPhone → No USB? Upload a pairing file**. With more than
+one iPhone, select the device at the top of the page first. The file is written to that device's
+profile (`/data/rp-pairing.plist` for the default, `/data/devices/<id>/rp-pairing.plist` for added
+devices) with mode 0600, and an invalid file is rejected without touching a working pairing.
+
 If you run a privileged LXC and pass through `/var/run/usbmuxd` plus `/dev/bus/usb`, the dashboard's
 **Pair over USB** action also works; in that case remove `ALTKEEPER_NO_AUTO_PAIR=1` from the Compose
 file. Most users should not do this.

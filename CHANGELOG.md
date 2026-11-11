@@ -34,6 +34,10 @@
   still look for the legacy names cannot self-update to this release and need a manual download.
 
 ### Added
+- Upload an `rp-pairing.plist` from the dashboard (**iPhone → No USB? Upload a pairing file**) for the
+  selected device. It is validated before replacing a working pairing and written with mode 0600 to
+  the device profile (`/data/rp-pairing.plist` or `/data/devices/<id>/rp-pairing.plist`), so a
+  container or LXC without USB can pair a new iPhone without copying files by hand.
 - `install.sh`, a community-scripts style one-command Docker installer for Debian/Ubuntu and
   Proxmox LXC: installs Docker when missing, builds the image, creates `/opt/altkeeper` with a
   generated PIN, copies an optional pairing file, starts the service and waits for `/healthz`.

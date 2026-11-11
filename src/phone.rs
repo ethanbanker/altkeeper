@@ -840,7 +840,7 @@ async fn list_usb_devices(
         .map_err(dbg)
 }
 
-async fn pairing_file_valid(path: &Path) -> bool {
+pub(crate) async fn pairing_file_valid(path: &Path) -> bool {
     tokio::time::timeout(Duration::from_secs(2), RpPairingFile::read_from_file(path))
         .await
         .is_ok_and(|result| result.is_ok())

@@ -1239,6 +1239,16 @@
             <div class="row action-row" style="margin-top:10px">
               <button id="btn-pair-usb" type="button" data-i18n="Pair device over USB">Pair device over USB</button>
             </div>
+            <details style="margin-top:12px">
+              <summary data-i18n="No USB? Upload a pairing file" style="cursor:pointer; font-weight:650; color:var(--accent);">No USB? Upload a pairing file</summary>
+              <p class="muted" data-i18n="Create rp-pairing.plist on a computer with the iPhone plugged in, then upload it here. It is saved for the iPhone selected at the top of the page.">Create rp-pairing.plist on a computer with the iPhone plugged in, then upload it here. It is saved for the iPhone selected at the top of the page.</p>
+              <input id="pairing-file" type="file" accept=".plist,application/xml,text/xml,application/octet-stream" style="width:100%;max-width:100%;box-sizing:border-box;">
+              <div class="row action-row" style="margin-top:10px">
+                <button id="btn-upload-pairing" type="button" data-i18n="Upload pairing file">Upload pairing file</button>
+              </div>
+              <div class="banner good" id="pairing-file-message" role="status" aria-live="polite" hidden></div>
+              <div class="banner bad" id="pairing-file-error" hidden></div>
+            </details>
             <label class="check" for="auto-pair-enabled">
               <input id="auto-pair-enabled" type="checkbox">
               <span data-i18n="Pair automatically when a new iPhone connects over USB">Pair automatically when a new iPhone connects over USB</span>
@@ -2292,6 +2302,36 @@ $("phone-addresses-save").onclick = () => {
     $("phone-addresses").value = saved.addresses.join("\n");
     banner("phone-addresses-message", t("Addresses saved."), "good");
   }, "phone-addresses-error");
+};
+
+$("btn-upload-pairing").onclick = async () => {
+  banner("pairing-file-error", "");
+  banner("pairing-file-message", "");
+  const input = $("pairing-file");
+  const file = input.files && input.files[0];
+  if (!file) return banner("pairing-file-error", t("Choose an rp-pairing.plist file first."), "bad");
+  if (file.size > 64 * 1024) return banner("pairing-file-error", t("The pairing file is larger than 64 KiB."), "bad");
+  const button = $("btn-upload-pairing");
+  button.disabled = true;
+  try {
+    const form = new FormData();
+    form.append("pairing", file, file.name || "rp-pairing.plist");
+    const response = await fetch("/api/pairing-file", {
+      method: "POST",
+      headers: { "X-Requested-With": "altkeeper", ...deviceHeaders() },
+      body: form,
+    });
+    let result = {};
+    try { result = await response.json(); } catch (_) {}
+    if (!response.ok) throw new Error(result.error || ("Error " + response.status));
+    input.value = "";
+    banner("pairing-file-message", t("Pairing file saved. Checking the iPhone…"), "good");
+    refresh();
+  } catch (error) {
+    banner("pairing-file-error", error.message, "bad");
+  } finally {
+    button.disabled = false;
+  }
 };
 
 function requestUsbPairing() {
